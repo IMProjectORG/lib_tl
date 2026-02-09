@@ -361,7 +361,7 @@ def readAndGenerate(inputFiles, outputPath, scheme):
 
   for line in lines:
     comment = ''
-    nocomment = re.match(r'^(.*?)//(.*?)$', line)
+    nocomment = re.match(r'^(.*?)(?<!:)//(.*?)$', line)
     if (nocomment):
       line = nocomment.group(1)
       comment = nocomment.group(2)
@@ -383,6 +383,22 @@ def readAndGenerate(inputFiles, outputPath, scheme):
     nametype = re.match(r'([a-zA-Z\.0-9_]+)(#[0-9a-f]+)?([^=]*)=\s*([a-zA-Z\.<>0-9_]+);', line)
     if (not nametype):
       raise ValueError('Bad line found: ' + line)
+
+    # Parse extra attributes like api=...;host=...;method=...;
+    api_value = ''
+    host_value = ''
+    method_value = ''
+    rest_of_line = line[nametype.end():].strip()
+    if rest_of_line:
+        parts = rest_of_line.split(';')
+        for part in parts:
+            if '=' in part:
+                k, v = part.split('=', 1)
+                k = k.strip()
+                v = v.strip()
+                if k == 'api': api_value = v
+                elif k == 'host': host_value = v
+                elif k == 'method': method_value = v
 
     comments = accumulatedComments
     accumulatedComments = ''
@@ -617,10 +633,26 @@ def readAndGenerate(inputFiles, outputPath, scheme):
           methodBodies += fullTypeName(name) + '::' + fullTypeName(name) + '(' + ', '.join(prmsStr) + ') : ' + ', '.join(prmsInit) + ' {\n}\n'
 
       funcsText += '\t' + typeIdType + ' type() const {\n\t\treturn ' + idPrefix + name + ';\n\t}\n'; # type id
+      funcsText += '\tMTPstring api() const {\n\t\treturn MTP_string("' + api_value + '");\n\t}\n'
+      funcsText += '\tMTPstring host() const {\n\t\treturn MTP_string("' + host_value + '");\n\t}\n'
+      funcsText += '\tMTPstring method() const {\n\t\treturn MTP_string("' + method_value + '");\n\t}\n'
+      
+      hasJsonContent = False
+      for k in prmsList:
+          if k == hasFlags: continue
+          if k in trivialConditions: continue
+          if k in botsOnlyPrms: continue
+          hasJsonContent = True
+          break
+      shouldSerialize = hasJsonContent or (api_value != '') or (host_value != '') or (method_value != '')
+
       if readWriteSection:
         funcsText += '\n'
         funcsText += '\ttemplate <typename Prime>\n'
         funcsText += '\t[[nodiscard]] bool read(const Prime *&from, const Prime *end, ' + typeIdType + ' cons = ' + idPrefix + name + ');\n'; # read method
+        funcsText += '\t[[nodiscard]] QJsonObject toJsonObject() const;\n'
+        funcsText += '\tvoid fromJsonObject(const QJsonObject &json);\n'
+
         if (isTemplate != ''):
           methodBodies += 'template <typename TQueryType>\n'
           methodBodies += 'template <typename Prime>\n'
@@ -628,19 +660,14 @@ def readAndGenerate(inputFiles, outputPath, scheme):
         else:
           methodBodies += 'template <typename Prime>\n'
           methodBodies += 'bool ' + fullTypeName(name) + '::read(const Prime *&from, const Prime *end, ' + typeIdType + ' cons) {\n'
-        readFunc = ''
-        for k in prmsList:
-          v = prms[k]
-          if k in conditionsList:
-            if not k in trivialConditions:
-              readFunc += '\t\t&& ((_' + hasFlags + '.v & Flag::f_' + k + ') ? _' + k + '.read(from, end) : ((_' + k + ' = ' + fullTypeName(v) + '()), true))\n'
-          else:
-            readFunc += '\t\t&& _' + k + '.read(from, end)\n'
-        if readFunc != '':
-          methodBodies += '\treturn' + readFunc[4:len(readFunc)-1] + ';\n'
-        else:
-          methodBodies += '\treturn true;\n'
+        
+        if shouldSerialize:
+             methodBodies += '\ttl::string_type jsonBuffer;\n'
+             methodBodies += '\tif (!jsonBuffer.read(from, end)) return false;\n'
+             methodBodies += '\tfromJsonObject(QJsonDocument::fromJson(jsonBuffer.v).object());\n'
+        methodBodies += '\treturn true;\n'
         methodBodies += '}\n'
+
         if isTemplate == '':
           methodBodies += 'template bool ' + fullTypeName(name) + '::read<' + primeType + '>(const ' + primeType + ' *&from, const ' + primeType + ' *end, ' + typeIdType + ' cons);\n'
 
@@ -653,23 +680,65 @@ def readAndGenerate(inputFiles, outputPath, scheme):
         else:
           methodBodies += 'template <typename Accumulator>\n'
           methodBodies += 'void ' + fullTypeName(name) + '::write(Accumulator &to) const {\n'
-        for k in prmsList:
-          if k in conditionsList:
-            if not k in trivialConditions:
-              methodBodies += '\tif (_' + hasFlags + '.v & Flag::f_' + k + ') _' + k + '.write(to);\n'
-          else:
-            methodBodies += '\t_' + k + '.write(to);\n'
+        
+        if shouldSerialize:
+             methodBodies += '\tQJsonObject json = toJsonObject();\n'
+             if api_value:
+                  methodBodies += '\tjson.insert("api", QString("' + api_value + '"));\n'
+             if host_value:
+                  methodBodies += '\tjson.insert("host", QString("' + host_value + '"));\n'
+             if method_value:
+                  methodBodies += '\tjson.insert("method", QString("' + method_value + '"));\n'
+             methodBodies += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
+             methodBodies += '\ttl::make_string(bytes).write(to);\n'
         methodBodies += '}\n'
+
         if isTemplate == '':
           methodBodies += 'template void ' + fullTypeName(name) + '::write<' + bufferType + '>(' + bufferType + ' &to) const;\n'
           methodBodies += 'template void ' + fullTypeName(name) + '::write<::tl::details::LengthCounter>(::tl::details::LengthCounter &to) const;\n'
+
+        # Implement toJsonObject and fromJsonObject for RPC functions
+        if (isTemplate != ''):
+            methodBodies += 'template <typename TQueryType>\n'
+            methodBodies += 'QJsonObject ' + fullTypeName(name) + '<TQueryType>::toJsonObject() const {\n'
+        else:
+            methodBodies += 'QJsonObject ' + fullTypeName(name) + '::toJsonObject() const {\n'
+        methodBodies += '\tQJsonObject json;\n'
+        for k in prmsList:
+            if k in trivialConditions or k in botsOnlyPrms:
+                continue
+            if k in conditionsList:
+                methodBodies += '\tif (_' + hasFlags + '.v & Flag::f_' + k + ') json.insert("' + k + '", MtpToJson(_' + k + '));\n'
+            else:
+                methodBodies += '\tjson.insert("' + k + '", MtpToJson(_' + k + '));\n'
+        methodBodies += '\treturn json;\n'
+        methodBodies += '}\n'
+
+        if (isTemplate != ''):
+            methodBodies += 'template <typename TQueryType>\n'
+            methodBodies += 'void ' + fullTypeName(name) + '<TQueryType>::fromJsonObject(const QJsonObject &json) {\n'
+        else:
+            methodBodies += 'void ' + fullTypeName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
+        for k in prmsList:
+            if k in trivialConditions or k in botsOnlyPrms:
+                continue
+            if k in conditionsList:
+                methodBodies += '\tif (json.contains("' + k + '")) {\n'
+                methodBodies += '\t\t_' + hasFlags + '.v |= Flag::f_' + k + ';\n'
+                methodBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                methodBodies += '\t}\n'
+            else:
+                methodBodies += '\tif (json.contains("' + k + '")) {\n'
+                methodBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                methodBodies += '\t}\n'
+        methodBodies += '}\n'
 
       if writeConversion:
         conversionSourceTo += '\n\
 template <>\n\
 ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
-\treturn [value = std::move(request)]() -> ExternalRequest {\n\
-\t\treturn new ' + conversionName(name) + '('
+	return [value = std::move(request)]() -> ExternalRequest {\n\
+		return new ' + conversionName(name) + '('
         conversionArguments = []
         for k in prmsList:
           prmsTypeBare = prms[k]
@@ -694,7 +763,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
             else:
               conversionArguments.append('::td::td_api::object_ptr<' + conversionName(prmsTypeBare) + '>(' + conversionValue + ')')
         conversionSourceTo += ', '.join(conversionArguments) + ');\n\
-\t};\n\
+	};\n\
 }\n'
         if len(prmsList) > 0:
           funcsText += '\n'
@@ -734,7 +803,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         else:
           funcsText += '\n\tusing ResponseType = ' + fullTypeName(resType) + ';\n\n'
         methods += methodBodies
-
+      
       if (len(prms) > len(trivialConditions) + len(botsOnlyPrms)):
         funcsText += 'private:\n'
         for paramName in prmsList:
@@ -766,7 +835,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         funcsList.append(restype)
         funcsDict[restype] = []
 #        TypesDict[restype] = resType
-      funcsDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms])
+      funcsDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value])
     else:
       if (isTemplate != ''):
         print('Template types not allowed: "' + resType + '" in line: ' + line)
@@ -775,7 +844,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         typesList.append(restype)
         typesDict[restype] = []
       TypesDict[restype] = resType
-      typesDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms])
+      typesDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value])
 
       TypeConstructors[name] = {'typeBare': restype, 'typeBoxed': resType}
 
@@ -817,6 +886,66 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
     reader = ''
     writer = ''
     newFast = ''
+    
+    # Logic to generate toJsonObject for Type class
+    toJsonBodies = ''
+    if withType:
+        toJsonBodies += '\tswitch (_type) {\n'
+        for data in v:
+            name = data[0]
+            toJsonBodies += '\tcase ' + idPrefix + name + ': { auto j = c_' + name + '().toJsonObject(); j.insert("_id", (qint64)' + idPrefix + name + '); return j; } break;\n'
+        toJsonBodies += '\tdefault: Unexpected("Type in ' + fullTypeName(restype) + '::toJsonObject.");\n'
+        toJsonBodies += '\t}\n'
+    else:
+        # If nullable?
+        if nullable:
+            toJsonBodies += '\tif (!hasData()) return QJsonObject();\n'
+        toJsonBodies += '\tauto j = c_' + v[0][0] + '().toJsonObject();\n'
+        toJsonBodies += '\tj.insert("_id", (qint64)' + idPrefix + v[0][0] + ');\n'
+        toJsonBodies += '\treturn j;\n'
+
+    # Logic to generate fromJsonObject for Type class
+    fromJsonBodies = ''
+    if withType:
+        fromJsonBodies += '\tuint32 cons = (uint32)json.value("_id").toVariant().toLongLong();\n'
+        fromJsonBodies += '\t_type = cons;\n'
+        fromJsonBodies += '\tswitch(_type) {\n'
+        for data in v:
+            name = data[0]
+            prms = data[3]
+            trivialConditions = data[8]
+            botsOnlyPrms = data[12]
+            if (len(prms) > len(trivialConditions) + len(botsOnlyPrms)):
+                fromJsonBodies += '\tcase ' + idPrefix + name + ': {\n'
+                fromJsonBodies += '\t\tauto data = new ' + fullDataName(name) + '();\n'
+                fromJsonBodies += '\t\tdata->fromJsonObject(json);\n'
+                fromJsonBodies += '\t\tsetData(data);\n'
+                fromJsonBodies += '\t} break;\n'
+            else:
+                fromJsonBodies += '\tcase ' + idPrefix + name + ': '
+                if withData:
+                    fromJsonBodies += 'setData(nullptr); '
+                fromJsonBodies += 'break;\n'
+        fromJsonBodies += '\tdefault: Unexpected("Cons in ' + fullTypeName(restype) + '::fromJsonObject.");\n'
+        fromJsonBodies += '\t}\n'
+    else:
+        name = v[0][0]
+        prms = v[0][3]
+        trivialConditions = v[0][8]
+        botsOnlyPrms = v[0][12]
+        hasFields = (len(prms) > len(trivialConditions) + len(botsOnlyPrms))
+        
+        if nullable:
+            fromJsonBodies += '\tif (json.isEmpty()) { setData(nullptr); return; }\n'
+        
+        if hasFields:
+            fromJsonBodies += '\tauto data = new ' + fullDataName(name) + '();\n'
+            fromJsonBodies += '\tdata->fromJsonObject(json);\n'
+            fromJsonBodies += '\tsetData(data);\n'
+        else:
+            if withData:
+                fromJsonBodies += '\tsetData(nullptr);\n'
+
 
     if writeConversion:
       if not restype in builtinTypes and not restype in conversionBuiltinTypes:
@@ -912,6 +1041,9 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
       nullablePrms = data[10]
       nullableVectors = data[11]
       botsOnlyPrms = data[12]
+      api_value = data[13]
+      host_value = data[14]
+      method_value = data[15]
 
       dataText = ''
       if (len(prms) > len(trivialConditions) + len(botsOnlyPrms)):
@@ -922,6 +1054,23 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
       dataText += 'public:\n'
       dataText += '\ttemplate <typename Other>\n'
       dataText += '\tstatic constexpr bool Is() { return std::is_same_v<std::decay_t<Other>, ' + fullDataName(name) + '>; };\n\n'
+      dataText += '\tMTPstring api() const {\n\t\treturn MTP_string("' + api_value + '");\n\t}\n'
+      dataText += '\tMTPstring host() const {\n\t\treturn MTP_string("' + host_value + '");\n\t}\n'
+      dataText += '\tMTPstring method() const {\n\t\treturn MTP_string("' + method_value + '");\n\t}\n'
+      
+      hasJsonContent = False
+      for k in prmsList:
+          if k == hasFlags: continue
+          if k in trivialConditions: continue
+          if k in botsOnlyPrms: continue
+          hasJsonContent = True
+          break
+      shouldSerialize = hasJsonContent or (api_value != '') or (host_value != '') or (method_value != '')
+
+      if readWriteSection:
+          dataText += '\t[[nodiscard]] QJsonObject toJsonObject() const;\n'
+          dataText += '\tvoid fromJsonObject(const QJsonObject &json);\n'
+
       creatorParams = []
       creatorParamsList = []
       readText = ''
@@ -1007,12 +1156,9 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           prmsInit.append('_' + paramName + '(' + paramName + '_)')
           if withType:
             writeText += '\t'
-          if (paramName in conditions):
-            readText += '\t\t&& (v' + paramName + '() ? _' + paramName + '.read(from, end) : ((_' + paramName + ' = ' + fullTypeName(paramType) + '()), true))\n'
-            writeText += '\tif (const auto v' + paramName + ' = v.v' + paramName + '()) v' + paramName + '->write(to);\n'
-          else:
-            readText += '\t\t&& _' + paramName + '.read(from, end)\n'
-            writeText += '\tv.v' + paramName + '().write(to);\n'
+          
+          # We don't use readText/writeText for bodies anymore, but keep for fallback? 
+          # No, we generate JSON body.
 
         dataText += ', '.join(prmsStr) + ');\n'
 
@@ -1023,10 +1169,38 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           dataText += '\t[[nodiscard]] bool read(const ' + primeType + ' *&from, const ' + primeType + ' *end);\n'
 
           constructsBodies += 'bool ' + fullDataName(name) + '::read(const ' + primeType + ' *&from, const ' + primeType + ' *end) {\n'
-          if readText != '':
-            constructsBodies += '\treturn' + readText[4:len(readText)-1] + ';\n'
-          else:
-            constructsBodies += '\treturn true;\n'
+          constructsBodies += '\ttl::string_type jsonBuffer;\n'
+          constructsBodies += '\tif (!jsonBuffer.read(from, end)) return false;\n'
+          constructsBodies += '\tfromJsonObject(QJsonDocument::fromJson(jsonBuffer.v).object());\n'
+          constructsBodies += '\treturn true;\n'
+          constructsBodies += '}\n'
+          
+          # Implement toJsonObject and fromJsonObject for Data types
+          constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const {\n'
+          constructsBodies += '\tQJsonObject json;\n'
+          for k in prmsList:
+              if k in trivialConditions or k in botsOnlyPrms:
+                  continue
+              if k in conditionsList:
+                  constructsBodies += '\tif (_' + hasFlags + '.v & Flag::f_' + k + ') json.insert("' + k + '", MtpToJson(_' + k + '));\n'
+              else:
+                  constructsBodies += '\tjson.insert("' + k + '", MtpToJson(_' + k + '));\n'
+          constructsBodies += '\treturn json;\n'
+          constructsBodies += '}\n'
+
+          constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
+          for k in prmsList:
+              if k in trivialConditions or k in botsOnlyPrms:
+                  continue
+              if k in conditionsList:
+                  constructsBodies += '\tif (json.contains("' + k + '")) {\n'
+                  constructsBodies += '\t\t_' + hasFlags + '.v |= Flag::f_' + k + ';\n'
+                  constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                  constructsBodies += '\t}\n'
+              else:
+                  constructsBodies += '\tif (json.contains("' + k + '")) {\n'
+                  constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                  constructsBodies += '\t}\n'
           constructsBodies += '}\n'
 
         dataText += '\n'
@@ -1078,6 +1252,11 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         constructsBodies += '\tstatic const ' + fullDataName(name) + ' result;\n'
         constructsBodies += '\treturn result;\n'
         constructsBodies += '}\n'
+        
+        # Empty object implementations
+        if readWriteSection:
+            constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const { return QJsonObject(); }\n'
+            constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) { }\n'
 
       if writeConversion and not restype in builtinTypes and not restype in conversionBuiltinTypes:
         if (len(v) == 1):
@@ -1178,7 +1357,18 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
 
           writer += '\tcase ' + idPrefix + name + ': {\n'; # write switch line
           writer += '\t\tconst ' + fullDataName(name) + ' &v = c_' + name + '();\n'
-          writer += writeText
+          
+          # JSON Write Implementation for Type wrapper
+          writer += '\t\tQJsonObject json = v.toJsonObject();\n'
+          if api_value:
+              writer += '\t\tjson.insert("api", QString("' + api_value + '"));\n'
+          if host_value:
+              writer += '\t\tjson.insert("host", QString("' + host_value + '"));\n'
+          if method_value:
+              writer += '\t\tjson.insert("method", QString("' + method_value + '"));\n'
+          writer += '\t\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
+          writer += '\t\ttl::make_string(bytes).write(to);\n'
+          
           writer += '\t} break;\n'
         else:
           reader += 'break;\n'
@@ -1192,7 +1382,17 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           reader += '\t}\n'
 
           writer += '\tconst ' + fullDataName(name) + ' &v = c_' + name + '();\n'
-          writer += writeText
+          
+          # JSON Write Implementation for Monomorphic Type
+          writer += '\tQJsonObject json = v.toJsonObject();\n'
+          if api_value:
+              writer += '\tjson.insert("api", QString("' + api_value + '"));\n'
+          if host_value:
+              writer += '\tjson.insert("host", QString("' + host_value + '"));\n'
+          if method_value:
+              writer += '\tjson.insert("method", QString("' + method_value + '"));\n'
+          writer += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
+          writer += '\ttl::make_string(bytes).write(to);\n'
 
     if nullable:
       if not withType and not withData:
@@ -1255,6 +1455,54 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         methods += '\treturn ' + idPrefix + v[0][0] + ';\n'
     methods += '}\n'
 
+    typesText += '\tMTPstring api() const;\n'
+    methods += 'MTPstring ' + fullTypeName(restype) + '::api() const {\n'
+    if withType:
+        methods += '\tswitch (_type) {\n'
+        for data in v:
+            name = data[0]
+            methods += '\tcase ' + idPrefix + name + ': return c_' + name + '().api();\n'
+        methods += '\tdefault: return MTPstring();\n'
+        methods += '\t}\n'
+    else:
+        if nullable:
+             methods += '\treturn hasData() ? c_' + v[0][0] + '().api() : MTPstring();\n'
+        else:
+             methods += '\treturn c_' + v[0][0] + '().api();\n'
+    methods += '}\n'
+
+    typesText += '\tMTPstring host() const;\n'
+    methods += 'MTPstring ' + fullTypeName(restype) + '::host() const {\n'
+    if withType:
+        methods += '\tswitch (_type) {\n'
+        for data in v:
+            name = data[0]
+            methods += '\tcase ' + idPrefix + name + ': return c_' + name + '().host();\n'
+        methods += '\tdefault: return MTPstring();\n'
+        methods += '\t}\n'
+    else:
+        if nullable:
+             methods += '\treturn hasData() ? c_' + v[0][0] + '().host() : MTPstring();\n'
+        else:
+             methods += '\treturn c_' + v[0][0] + '().host();\n'
+    methods += '}\n'
+
+    typesText += '\tMTPstring method() const;\n'
+    methods += 'MTPstring ' + fullTypeName(restype) + '::method() const {\n'
+    if withType:
+        methods += '\tswitch (_type) {\n'
+        for data in v:
+            name = data[0]
+            methods += '\tcase ' + idPrefix + name + ': return c_' + name + '().method();\n'
+        methods += '\tdefault: return MTPstring();\n'
+        methods += '\t}\n'
+    else:
+        if nullable:
+             methods += '\treturn hasData() ? c_' + v[0][0] + '().method() : MTPstring();\n'
+        else:
+             methods += '\treturn c_' + v[0][0] + '().method();\n'
+    methods += '}\n'
+
     if readWriteSection:
       typesText += '\n'
       typesText += '\t[[nodiscard]] bool read(const ' + primeType + ' *&from, const ' + primeType + ' *end, ' + typeIdType + ' cons'; # read method
@@ -1288,6 +1536,17 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
       methods += '}\n'
       methods += 'template void ' + fullTypeName(restype) + '::write<' + bufferType + '>(' + bufferType + ' &to) const;\n'
       methods += 'template void ' + fullTypeName(restype) + '::write<::tl::details::LengthCounter>(::tl::details::LengthCounter &to) const;\n'
+      
+      typesText += '\t[[nodiscard]] QJsonObject toJsonObject() const;\n'
+      typesText += '\tvoid fromJsonObject(const QJsonObject &json);\n'
+      
+      methods += 'QJsonObject ' + fullTypeName(restype) + '::toJsonObject() const {\n'
+      methods += toJsonBodies
+      methods += '}\n'
+      
+      methods += 'void ' + fullTypeName(restype) + '::fromJsonObject(const QJsonObject &json) {\n'
+      methods += fromJsonBodies
+      methods += '}\n'
 
     typesText += '\n\tusing ResponseType = void;\n'; # no response types declared
     if optimizeSingleData:
@@ -1490,6 +1749,116 @@ bool DumpToTextType(DumpToTextBuffer &to, const ' + primeType + ' *&from, const 
 #include "base/flags.h"\n\
 #include "tl/tl_boxed.h"\n\
 #include "tl/tl_type_owner.h"\n\
+#include <QtCore/QJsonObject>\n\
+#include <QtCore/QJsonDocument>\n\
+#include <QtCore/QJsonArray>\n\
+#include <QtCore/QString>\n\
+#include <QtCore/QByteArray>\n\
+\n\
+namespace MTP { namespace details { class SerializedRequest; } }\n\
+QJsonValue MtpToJson(const MTP::details::SerializedRequest &v);\n\
+void MtpFromJson(const QJsonValue &j, MTP::details::SerializedRequest &v);\n\
+\n\
+template <typename T>\n\
+inline QJsonValue MtpToJson(const T &v);\n\
+\n\
+template <typename T>\n\
+inline void MtpFromJson(const QJsonValue &j, T &v);\n\
+\n\
+inline QJsonValue MtpToJson(const MTPint &v) { return v.v; }\n\
+inline void MtpFromJson(const QJsonValue &j, MTPint &v) { v.v = j.toInt(); }\n\
+\n\
+inline QJsonValue MtpToJson(const MTPlong &v) { return QString::number((qint64)v.v); }\n\
+inline void MtpFromJson(const QJsonValue &j, MTPlong &v) {\n\
+	if (j.isString()) v.v = j.toString().toLongLong();\n\
+	else v.v = (qint64)j.toDouble();\n\
+}\n\
+\n\
+inline QJsonValue MtpToJson(const MTPdouble &v) { return v.v; }\n\
+inline void MtpFromJson(const QJsonValue &j, MTPdouble &v) { v.v = j.toDouble(); }\n\
+\n\
+inline QJsonValue MtpToJson(const tl::string_type &v) { return QString::fromUtf8(v.v.toBase64()); }\n\
+inline void MtpFromJson(const QJsonValue &j, tl::string_type &v) { v.v = QByteArray::fromBase64(j.toString().toUtf8()); }\n\
+\n\
+inline QJsonValue MtpToJson(const MTPint128 &v) {\n\
+    QByteArray b(reinterpret_cast<const char*>(&v), sizeof(v));\n\
+    return QString::fromUtf8(b.toBase64());\n\
+}\n\
+inline void MtpFromJson(const QJsonValue &j, MTPint128 &v) {\n\
+    QByteArray b = QByteArray::fromBase64(j.toString().toUtf8());\n\
+    if (b.size() == sizeof(v)) memcpy(&v, b.constData(), sizeof(v));\n\
+}\n\
+\n\
+inline QJsonValue MtpToJson(const MTPint256 &v) {\n\
+    QByteArray b(reinterpret_cast<const char*>(&v), sizeof(v));\n\
+    return QString::fromUtf8(b.toBase64());\n\
+}\n\
+inline void MtpFromJson(const QJsonValue &j, MTPint256 &v) {\n\
+    QByteArray b = QByteArray::fromBase64(j.toString().toUtf8());\n\
+    if (b.size() == sizeof(v)) memcpy(&v, b.constData(), sizeof(v));\n\
+}\n\
+\n\
+template <typename T>\n\
+inline QJsonValue MtpToJson(const tl::flags_type<T> &v) {\n\
+	if constexpr (sizeof(T) > 4) {\n\
+		return QString::number((quint64)v.v.value());\n\
+	} else {\n\
+		return (qint32)v.v.value();\n\
+	}\n\
+}\n\
+\n\
+template <typename T>\n\
+inline void MtpFromJson(const QJsonValue &j, tl::flags_type<T> &v) {\n\
+	if constexpr (sizeof(T) > 4) {\n\
+		if (j.isString()) v.v = T::from_raw((typename T::Type)j.toString().toULongLong());\n\
+		else v.v = T::from_raw((typename T::Type)j.toDouble());\n\
+	} else {\n\
+		v.v = T::from_raw((typename T::Type)j.toInt());\n\
+	}\n\
+}\n\
+\n\
+template <typename T>\n\
+inline QJsonValue MtpToJson(const MTPvector<T> &v) {\n\
+	QJsonArray arr;\n\
+	for (const auto &item : v.v) {\n\
+		arr.append(MtpToJson(item));\n\
+	}\n\
+	return arr;\n\
+}\n\
+\n\
+template <typename T>\n\
+inline void MtpFromJson(const QJsonValue &j, MTPvector<T> &v) {\n\
+	QJsonArray arr = j.toArray();\n\
+	v.v.clear();\n\
+	v.v.reserve(arr.size());\n\
+	for (const auto &val : arr) {\n\
+		T item;\n\
+		MtpFromJson(val, item);\n\
+		v.v.push_back(std::move(item));\n\
+	}\n\
+}\n\
+\n\
+template <typename T>\n\
+inline QJsonValue MtpToJson(const tl::boxed<T> &v) {\n\
+	return MtpToJson(static_cast<const T&>(v));\n\
+}\n\
+\n\
+template <typename T>\n\
+inline void MtpFromJson(const QJsonValue &j, tl::boxed<T> &v) {\n\
+	MtpFromJson(j, static_cast<T&>(v));\n\
+}\n\
+\n\
+template <typename T>\n\
+inline QJsonValue MtpToJson(const T &v) {\n\
+	return v.toJsonObject();\n\
+}\n\
+\n\
+template <typename T>\n\
+inline void MtpFromJson(const QJsonValue &j, T &v) {\n\
+	if (j.isObject()) {\n\
+		v.fromJsonObject(j.toObject());\n\
+	}\n\
+}\n\
 \n\
 ' + ('namespace ' + globalNamespace + ' {\n' if globalNamespace != '' else '') + '\
 ' + ('namespace ' + creatorNamespace + ' {\n' if creatorNamespace != '' else '') + '\
@@ -1522,14 +1891,42 @@ enum {\n\
 ' + factories + '\n\
 ' + ('} // namespace ' + globalNamespace + '\n' if globalNamespace != '' else '')
 
-  source = '\
-// WARNING! All changes made in this file will be lost!\n\
-// Created from ' + inputNames + ' by \'generate.py\'\n\
-//\n\
-#include "' + outputHeaderBasename + '"\n\
-\n\
-// Creator proxy class definition\n\
-' + ('namespace ' + globalNamespace + ' {\n' if globalNamespace != '' else '') + '\
+  source = r'''
+// WARNING! All changes made in this file will be lost!
+// Created from ''' + inputNames + r''' by 'generate.py'
+//
+#include "''' + outputHeaderBasename + r'''"
+#include "mtproto/details/mtproto_serialized_request.h"
+
+QJsonValue MtpToJson(const MTP::details::SerializedRequest &v) {
+	if (!v) return QJsonValue();
+	const auto &data = *v;
+	const auto offset = MTP::details::SerializedRequest::kMessageBodyPosition;
+	if (data.size() <= offset) return QJsonValue();
+	
+	QByteArray bytes;
+	const auto len = (data.size() - offset) * sizeof(mtpPrime);
+	bytes.resize(len);
+	memcpy(bytes.data(), data.data() + offset, len);
+	return QString::fromUtf8(bytes.toBase64());
+}
+
+void MtpFromJson(const QJsonValue &j, MTP::details::SerializedRequest &v) {
+	QByteArray bytes = QByteArray::fromBase64(j.toString().toUtf8());
+	const auto intsCount = (bytes.size() / sizeof(mtpPrime));
+	v = MTP::details::SerializedRequest::Prepare(intsCount);
+	auto &buffer = *v;
+	const auto offset = MTP::details::SerializedRequest::kMessageBodyPosition;
+	if (buffer.size() >= offset + intsCount) {
+		memcpy(buffer.data() + offset, bytes.constData(), bytes.size());
+	}
+}
+
+namespace {
+} // namespace
+
+// Creator proxy class definition
+''' + ('namespace ' + globalNamespace + ' {\n' if globalNamespace != '' else '') + '\
 ' + ('namespace ' + creatorNamespace + ' {\n' if creatorNamespace != '' else '') + '\
 \n\
 class TypeCreator final {\n\
