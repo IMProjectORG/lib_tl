@@ -1777,24 +1777,24 @@ inline void MtpFromJson(const QJsonValue &j, MTPlong &v) {\n\
 inline QJsonValue MtpToJson(const MTPdouble &v) { return v.v; }\n\
 inline void MtpFromJson(const QJsonValue &j, MTPdouble &v) { v.v = j.toDouble(); }\n\
 \n\
-inline QJsonValue MtpToJson(const tl::string_type &v) { return QString::fromUtf8(v.v.toBase64()); }\n\
-inline void MtpFromJson(const QJsonValue &j, tl::string_type &v) { v.v = QByteArray::fromBase64(j.toString().toUtf8()); }\n\
+inline QJsonValue MtpToJson(const tl::string_type &v) { return QString::fromUtf8(v.v); }\n\
+inline void MtpFromJson(const QJsonValue &j, tl::string_type &v) { v.v = j.toString().toUtf8(); }\n\
 \n\
 inline QJsonValue MtpToJson(const MTPint128 &v) {\n\
-    QByteArray b(reinterpret_cast<const char*>(&v), sizeof(v));\n\
-    return QString::fromUtf8(b.toBase64());\n\
+    const auto b = QByteArray::fromRawData(reinterpret_cast<const char*>(&v), sizeof(v));\n\
+    return QString::fromUtf8(b);\n\
 }\n\
 inline void MtpFromJson(const QJsonValue &j, MTPint128 &v) {\n\
-    QByteArray b = QByteArray::fromBase64(j.toString().toUtf8());\n\
+    const auto b = j.toString().toUtf8();\n\
     if (b.size() == sizeof(v)) memcpy(&v, b.constData(), sizeof(v));\n\
 }\n\
 \n\
 inline QJsonValue MtpToJson(const MTPint256 &v) {\n\
-    QByteArray b(reinterpret_cast<const char*>(&v), sizeof(v));\n\
-    return QString::fromUtf8(b.toBase64());\n\
+    const auto b = QByteArray::fromRawData(reinterpret_cast<const char*>(&v), sizeof(v));\n\
+    return QString::fromUtf8(b);\n\
 }\n\
 inline void MtpFromJson(const QJsonValue &j, MTPint256 &v) {\n\
-    QByteArray b = QByteArray::fromBase64(j.toString().toUtf8());\n\
+    const auto b = j.toString().toUtf8();\n\
     if (b.size() == sizeof(v)) memcpy(&v, b.constData(), sizeof(v));\n\
 }\n\
 \n\
@@ -1908,11 +1908,15 @@ QJsonValue MtpToJson(const MTP::details::SerializedRequest &v) {
 	const auto len = (data.size() - offset) * sizeof(mtpPrime);
 	bytes.resize(len);
 	memcpy(bytes.data(), data.data() + offset, len);
-	return QString::fromUtf8(bytes.toBase64());
+	return QString::fromUtf8(bytes);
 }
 
 void MtpFromJson(const QJsonValue &j, MTP::details::SerializedRequest &v) {
-	QByteArray bytes = QByteArray::fromBase64(j.toString().toUtf8());
+	const auto bytes = j.toString().toUtf8();
+	if (bytes.size() % sizeof(mtpPrime)) {
+		v = {};
+		return;
+	}
 	const auto intsCount = (bytes.size() / sizeof(mtpPrime));
 	v = MTP::details::SerializedRequest::Prepare(intsCount);
 	auto &buffer = *v;
