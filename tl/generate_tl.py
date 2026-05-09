@@ -652,6 +652,7 @@ def readAndGenerate(inputFiles, outputPath, scheme):
         funcsText += '\t[[nodiscard]] bool read(const Prime *&from, const Prime *end, ' + typeIdType + ' cons = ' + idPrefix + name + ');\n'; # read method
         funcsText += '\t[[nodiscard]] QJsonObject toJsonObject() const;\n'
         funcsText += '\tvoid fromJsonObject(const QJsonObject &json);\n'
+        funcsText += '\t[[nodiscard]] const QString &GetJsonData() const { return jsonData_; }\n'
 
         if (isTemplate != ''):
           methodBodies += 'template <typename TQueryType>\n'
@@ -731,6 +732,7 @@ def readAndGenerate(inputFiles, outputPath, scheme):
                 methodBodies += '\tif (json.contains("' + k + '")) {\n'
                 methodBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
                 methodBodies += '\t}\n'
+        methodBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
         methodBodies += '}\n'
 
       if writeConversion:
@@ -820,6 +822,11 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
             funcsText += '\tstd::optional<' + ptypeFull + '> _' + paramName + ';\n'
           else:
             funcsText += '\t' + ptypeFull + ' _' + paramName + ';\n'
+        funcsText += '\tQString jsonData_;\n'
+        funcsText += '\n'
+      else:
+        funcsText += 'private:\n'
+        funcsText += '\tQString jsonData_;\n'
         funcsText += '\n'
 
       funcsText += '};\n'; # class ending
@@ -1070,6 +1077,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
       if readWriteSection:
           dataText += '\t[[nodiscard]] QJsonObject toJsonObject() const;\n'
           dataText += '\tvoid fromJsonObject(const QJsonObject &json);\n'
+          dataText += '\t[[nodiscard]] const QString &GetJsonData() const { return jsonData_; }\n'
 
       creatorParams = []
       creatorParamsList = []
@@ -1201,6 +1209,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
                   constructsBodies += '\tif (json.contains("' + k + '")) {\n'
                   constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
                   constructsBodies += '\t}\n'
+          constructsBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
           constructsBodies += '}\n'
 
         dataText += '\n'
@@ -1243,20 +1252,24 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
               dataText += '\tstd::optional<' + ptypeFull + '> _' + paramName + ';\n'
             else:
               dataText += '\t' + ptypeFull + ' _' + paramName + ';\n'
+          dataText += '\tQString jsonData_;\n'
           dataText += '\n'
         newFast = 'new ' + fullDataName(name) + '()'
       else:
+        dataText += 'private:\n'
+        dataText += '\tQString jsonData_;\n'
+        dataText += '\n'
         constructsBodies += 'const ' + fullDataName(name) + ' &' + fullTypeName(restype) + '::c_' + name + '() const {\n'
         if (withType):
           constructsBodies += '\tExpects(_type == ' + idPrefix + name + ');\n\n'
         constructsBodies += '\tstatic const ' + fullDataName(name) + ' result;\n'
         constructsBodies += '\treturn result;\n'
         constructsBodies += '}\n'
-        
+
         # Empty object implementations
         if readWriteSection:
             constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const { return QJsonObject(); }\n'
-            constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) { }\n'
+            constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) { jsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact); }\n'
 
       if writeConversion and not restype in builtinTypes and not restype in conversionBuiltinTypes:
         if (len(v) == 1):
