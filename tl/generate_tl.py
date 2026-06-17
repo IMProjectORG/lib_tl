@@ -388,7 +388,6 @@ def readAndGenerate(inputFiles, outputPath, scheme):
     api_value = ''
     host_value = ''
     method_value = ''
-    body_format_value = ''
     rest_of_line = line[nametype.end():].strip()
     if rest_of_line:
         parts = rest_of_line.split(';')
@@ -400,7 +399,6 @@ def readAndGenerate(inputFiles, outputPath, scheme):
                 if k == 'api': api_value = v
                 elif k == 'host': host_value = v
                 elif k == 'method': method_value = v
-                elif k == 'Content-Type': body_format_value = v
 
     comments = accumulatedComments
     accumulatedComments = ''
@@ -692,12 +690,6 @@ def readAndGenerate(inputFiles, outputPath, scheme):
                   methodBodies += '\tjson.insert("host", QString("' + host_value + '"));\n'
              if method_value:
                   methodBodies += '\tjson.insert("method", QString("' + method_value + '"));\n'
-             if body_format_value:
-                  methodBodies += '\t{\n'
-                  methodBodies += '\t\tauto headersObject = json.value(QString("headers")).toObject();\n'
-                  methodBodies += '\t\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
-                  methodBodies += '\t\tjson.insert(QString("headers"), headersObject);\n'
-                  methodBodies += '\t}\n'
              methodBodies += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
              methodBodies += '\ttl::make_string(bytes).write(to);\n'
         methodBodies += '}\n'
@@ -850,7 +842,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         funcsList.append(restype)
         funcsDict[restype] = []
 #        TypesDict[restype] = resType
-      funcsDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value, body_format_value])
+      funcsDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value])
     else:
       if (isTemplate != ''):
         print('Template types not allowed: "' + resType + '" in line: ' + line)
@@ -859,7 +851,7 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
         typesList.append(restype)
         typesDict[restype] = []
       TypesDict[restype] = resType
-      typesDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value, body_format_value])
+      typesDict[restype].append([name, typeid, prmsList, prms, hasFlags, hasFlags64, conditionsList, conditions, trivialConditions, isTemplate, nullablePrms, nullableVectors, botsOnlyPrms, api_value, host_value, method_value])
 
       TypeConstructors[name] = {'typeBare': restype, 'typeBoxed': resType}
 
@@ -1059,7 +1051,6 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
       api_value = data[13]
       host_value = data[14]
       method_value = data[15]
-      body_format_value = data[16]
 
       dataText = ''
       if (len(prms) > len(trivialConditions) + len(botsOnlyPrms)):
@@ -1195,21 +1186,22 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           # Implement toJsonObject and fromJsonObject for Data types
           if name == 'api_httpHeaders':
             constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const {\n'
-            constructsBodies += '\tQJsonObject headers;\n'
-            constructsBodies += '\tfor (const auto &entry : _entries.v) {\n'
-            constructsBodies += '\t\tconst auto &item = entry.c_api_httpHeaderItem();\n'
-            constructsBodies += '\t\theaders.insert(qs(item.vkey()), qs(item.vvalue()));\n'
+            constructsBodies += '\tQJsonObject json;\n'
+            constructsBodies += '\tfor (const auto &item : _entries.v) {\n'
+            constructsBodies += '\t\tconst auto &entry = item.c_api_httpHeaderItem();\n'
+            constructsBodies += '\t\tjson.insert(qs(entry.vkey()), qs(entry.vvalue()));\n'
             constructsBodies += '\t}\n'
-            constructsBodies += '\treturn headers;\n'
+            constructsBodies += '\treturn json;\n'
             constructsBodies += '}\n'
+
             constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
-            constructsBodies += '\tauto entries = QVector<MTPapi_HttpHeaderItem>();\n'
+            constructsBodies += '\tauto items = QVector<MTPapi_HttpHeaderItem>();\n'
             constructsBodies += '\tfor (auto it = json.begin(); it != json.end(); ++it) {\n'
-            constructsBodies += '\t\tentries.push_back(MTP_api_httpHeaderItem(\n'
+            constructsBodies += '\t\titems.push_back(MTP_api_httpHeaderItem(\n'
             constructsBodies += '\t\t\tMTP_string(it.key()),\n'
             constructsBodies += '\t\t\tMTP_string(it.value().toString())));\n'
             constructsBodies += '\t}\n'
-            constructsBodies += '\t_entries = MTP_vector<MTPapi_HttpHeaderItem>(entries);\n'
+            constructsBodies += '\t_entries = MTP_vector<MTPapi_HttpHeaderItem>(std::move(items));\n'
             constructsBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
             constructsBodies += '}\n'
           else:
@@ -1408,10 +1400,6 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
               writer += '\t\tjson.insert("host", QString("' + host_value + '"));\n'
           if method_value:
               writer += '\t\tjson.insert("method", QString("' + method_value + '"));\n'
-          if body_format_value:
-              writer += '\t\tauto headersObject = json.value(QString("headers")).toObject();\n'
-              writer += '\t\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
-              writer += '\t\tjson.insert(QString("headers"), headersObject);\n'
           writer += '\t\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
           writer += '\t\ttl::make_string(bytes).write(to);\n'
           
@@ -1437,10 +1425,6 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
               writer += '\tjson.insert("host", QString("' + host_value + '"));\n'
           if method_value:
               writer += '\tjson.insert("method", QString("' + method_value + '"));\n'
-          if body_format_value:
-              writer += '\tauto headersObject = json.value(QString("headers")).toObject();\n'
-              writer += '\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
-              writer += '\tjson.insert(QString("headers"), headersObject);\n'
           writer += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
           writer += '\ttl::make_string(bytes).write(to);\n'
 
@@ -1939,32 +1923,6 @@ enum {\n\
 ' + flagOperators + '\n\
 // Factory methods declaration\n\
 ' + factories + '\n\
-\n\
-// Custom json serialization for api.HttpHeaders.\n\
-inline QJsonValue MtpToJson(const MTPDapi_httpHeaders &v) {\n\
-	return v.toJsonObject();\n\
-}\n\
-\n\
-inline void MtpFromJson(const QJsonValue &j, MTPDapi_httpHeaders &v) {\n\
-	if (!j.isObject()) {\n\
-		return;\n\
-	}\n\
-	v.fromJsonObject(j.toObject());\n\
-}\n\
-\n\
-inline QJsonValue MtpToJson(const MTPapi_HttpHeaders &v) {\n\
-	return MtpToJson(v.data());\n\
-}\n\
-\n\
-inline void MtpFromJson(const QJsonValue &j, MTPapi_HttpHeaders &v) {\n\
-	if (!j.isObject()) {\n\
-		return;\n\
-	}\n\
-	auto data = MTPDapi_httpHeaders();\n\
-	data.fromJsonObject(j.toObject());\n\
-	v = MTP_api_httpHeaders(data.ventries());\n\
-}\n\
-\n\
 ' + ('} // namespace ' + globalNamespace + '\n' if globalNamespace != '' else '')
 
   source = r'''
