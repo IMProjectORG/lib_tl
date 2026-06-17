@@ -1184,54 +1184,33 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           constructsBodies += '}\n'
           
           # Implement toJsonObject and fromJsonObject for Data types
-          if name == 'api_httpHeaders':
-            constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const {\n'
-            constructsBodies += '\tQJsonObject json;\n'
-            constructsBodies += '\tfor (const auto &item : _entries.v) {\n'
-            constructsBodies += '\t\tconst auto &entry = item.c_api_httpHeaderItem();\n'
-            constructsBodies += '\t\tjson.insert(qs(entry.vkey()), qs(entry.vvalue()));\n'
-            constructsBodies += '\t}\n'
-            constructsBodies += '\treturn json;\n'
-            constructsBodies += '}\n'
+          constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const {\n'
+          constructsBodies += '\tQJsonObject json;\n'
+          for k in prmsList:
+              if k in trivialConditions or k in botsOnlyPrms:
+                  continue
+              if k in conditionsList:
+                  constructsBodies += '\tif (_' + hasFlags + '.v & Flag::f_' + k + ') json.insert("' + k + '", MtpToJson(_' + k + '));\n'
+              else:
+                  constructsBodies += '\tjson.insert("' + k + '", MtpToJson(_' + k + '));\n'
+          constructsBodies += '\treturn json;\n'
+          constructsBodies += '}\n'
 
-            constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
-            constructsBodies += '\tauto items = QVector<MTPapi_HttpHeaderItem>();\n'
-            constructsBodies += '\tfor (auto it = json.begin(); it != json.end(); ++it) {\n'
-            constructsBodies += '\t\titems.push_back(MTP_api_httpHeaderItem(\n'
-            constructsBodies += '\t\t\tMTP_string(it.key()),\n'
-            constructsBodies += '\t\t\tMTP_string(it.value().toString())));\n'
-            constructsBodies += '\t}\n'
-            constructsBodies += '\t_entries = MTP_vector<MTPapi_HttpHeaderItem>(std::move(items));\n'
-            constructsBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
-            constructsBodies += '}\n'
-          else:
-            constructsBodies += 'QJsonObject ' + fullDataName(name) + '::toJsonObject() const {\n'
-            constructsBodies += '\tQJsonObject json;\n'
-            for k in prmsList:
-                if k in trivialConditions or k in botsOnlyPrms:
-                    continue
-                if k in conditionsList:
-                    constructsBodies += '\tif (_' + hasFlags + '.v & Flag::f_' + k + ') json.insert("' + k + '", MtpToJson(_' + k + '));\n'
-                else:
-                    constructsBodies += '\tjson.insert("' + k + '", MtpToJson(_' + k + '));\n'
-            constructsBodies += '\treturn json;\n'
-            constructsBodies += '}\n'
-
-            constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
-            for k in prmsList:
-                if k in trivialConditions or k in botsOnlyPrms:
-                    continue
-                if k in conditionsList:
-                    constructsBodies += '\tif (json.contains("' + k + '")) {\n'
-                    constructsBodies += '\t\t_' + hasFlags + '.v |= Flag::f_' + k + ';\n'
-                    constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
-                    constructsBodies += '\t}\n'
-                else:
-                    constructsBodies += '\tif (json.contains("' + k + '")) {\n'
-                    constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
-                    constructsBodies += '\t}\n'
-            constructsBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
-            constructsBodies += '}\n'
+          constructsBodies += 'void ' + fullDataName(name) + '::fromJsonObject(const QJsonObject &json) {\n'
+          for k in prmsList:
+              if k in trivialConditions or k in botsOnlyPrms:
+                  continue
+              if k in conditionsList:
+                  constructsBodies += '\tif (json.contains("' + k + '")) {\n'
+                  constructsBodies += '\t\t_' + hasFlags + '.v |= Flag::f_' + k + ';\n'
+                  constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                  constructsBodies += '\t}\n'
+              else:
+                  constructsBodies += '\tif (json.contains("' + k + '")) {\n'
+                  constructsBodies += '\t\tMtpFromJson(json.value("' + k + '"), _' + k + ');\n'
+                  constructsBodies += '\t}\n'
+          constructsBodies += '\tjsonData_ = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
+          constructsBodies += '}\n'
 
         dataText += '\n'
         if len(prmsList) > 0:
