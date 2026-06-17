@@ -400,7 +400,7 @@ def readAndGenerate(inputFiles, outputPath, scheme):
                 if k == 'api': api_value = v
                 elif k == 'host': host_value = v
                 elif k == 'method': method_value = v
-                elif k == 'bodyFormat': body_format_value = v
+                elif k == 'Content-Type': body_format_value = v
 
     comments = accumulatedComments
     accumulatedComments = ''
@@ -693,7 +693,11 @@ def readAndGenerate(inputFiles, outputPath, scheme):
              if method_value:
                   methodBodies += '\tjson.insert("method", QString("' + method_value + '"));\n'
              if body_format_value:
-                  methodBodies += '\tjson.insert("bodyFormat", QString("' + body_format_value + '"));\n'
+                  methodBodies += '\t{\n'
+                  methodBodies += '\t\tauto headersObject = json.value(QString("headers")).toObject();\n'
+                  methodBodies += '\t\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
+                  methodBodies += '\t\tjson.insert(QString("headers"), headersObject);\n'
+                  methodBodies += '\t}\n'
              methodBodies += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
              methodBodies += '\ttl::make_string(bytes).write(to);\n'
         methodBodies += '}\n'
@@ -1405,7 +1409,9 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           if method_value:
               writer += '\t\tjson.insert("method", QString("' + method_value + '"));\n'
           if body_format_value:
-              writer += '\t\tjson.insert("bodyFormat", QString("' + body_format_value + '"));\n'
+              writer += '\t\tauto headersObject = json.value(QString("headers")).toObject();\n'
+              writer += '\t\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
+              writer += '\t\tjson.insert(QString("headers"), headersObject);\n'
           writer += '\t\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
           writer += '\t\ttl::make_string(bytes).write(to);\n'
           
@@ -1432,7 +1438,9 @@ ExternalGenerator tl_to_generator('+  fullTypeName(name) + ' &&request) {\n\
           if method_value:
               writer += '\tjson.insert("method", QString("' + method_value + '"));\n'
           if body_format_value:
-              writer += '\tjson.insert("bodyFormat", QString("' + body_format_value + '"));\n'
+              writer += '\tauto headersObject = json.value(QString("headers")).toObject();\n'
+              writer += '\theadersObject.insert(QString("Content-Type"), QString("' + body_format_value + '"));\n'
+              writer += '\tjson.insert(QString("headers"), headersObject);\n'
           writer += '\tQByteArray bytes = QJsonDocument(json).toJson(QJsonDocument::Compact);\n'
           writer += '\ttl::make_string(bytes).write(to);\n'
 
